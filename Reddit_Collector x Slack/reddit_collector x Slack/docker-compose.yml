@@ -1,0 +1,40 @@
+version: '3'
+
+services:
+  reddit_collector:
+    build: reddit_collector/
+    volumes:
+      - ./reddit_collector/:/app/
+    depends_on:
+      - mongodb
+    env_file:
+      - .env
+
+  mongodb:
+    image: mongo
+    ports:
+      - 27017:27017
+
+  etl_job:
+    build: etl_job/
+    volumes:
+      - ./etl_job/:/app/
+    depends_on:
+      - mongodb
+      - postgresdb
+
+  postgresdb:
+    image: postgres
+    ports:
+      - 5555:5432
+    environment:
+      - POSTGRES_USER=miguelpinheiro
+      - POSTGRES_PASSWORD=1234
+      - POSTGRES_DB=reedit_bot
+
+  slackbot:                       
+       build: slackbot/
+       volumes:
+       - ./slackbot/:/app/
+       depends_on:
+       - postgresdb

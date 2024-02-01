@@ -1,0 +1,10 @@
+pandas
+numpy
+ta
+tensorflow
+datetime
+yfinance
+scikit-learn
+keras
+alpaca-trade-api
+

@@ -1,0 +1,349 @@
+#APP CODE 
+
+#Imports
+import pandas as pd
+import numpy as np
+import ta
+import tensorflow as tf
+import datetime
+import yfinance as yf
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+from keras.layers import LSTM, Dense, Dropout
+from keras.models import Sequential
+import alpaca_trade_api as tradeapi
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+# Get user input
+def get_user_input():
+    user_input = {}
+
+    user_input['symbol'] = input("Enter the stock symbol (e.g., TSLA): ")
+    user_input['api_key'] = input("ALPACA_API_KEY")
+    user_input['secret_key'] = input("ALPACA_SECRET_KEY")
+
+    return user_input
+user_input = get_user_input()
+
+# Extract input values
+symbol = user_input['symbol']
+api_key = user_input['api_key'] #PKVT3BE2DLBQNBYQ0Z6E
+secret_key = user_input['secret_key'] #GAPZhGVXYw2M9zkUo71l0hd8fkiEVmH1f3MIF9Ch
+
+#ALPACA API SETUP
+API_KEY = api_key 
+SECRET_KEY = secret_key 
+BASE_URL = 'https://paper-api.alpaca.markets'  #Paper Market for tranning 
+
+api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL, api_version='v2')
+
+current_date = datetime.datetime.now().strftime('%Y-%m-%d')
+
+# Define Functions 
+
+def place_market_order(symbol, qty, side, take_profit=None, stop_loss=None):
+    if side == 'buy':
+        order = api.submit_order(
+            symbol=symbol,
+            qty=qty,
+            side='buy',
+            type='market',
+            time_in_force='gtc',
+           
+        )
+        print(f"Market buy order for {qty} shares of {symbol} placed successfully.")
+    elif side == 'sell':
+        order = api.submit_order(
+            symbol=symbol,
+            qty=qty,
+            side='sell',
+            type='market',
+            time_in_force='gtc',
+          
+        )
+        print(f"Market sell order for {qty} shares of {symbol} placed successfully.")
+    else:
+        print("Invalid order side. Use 'buy' or 'sell'.")
+        
+def make_price_prediction(model, input_features):
+    scaled_features = scaler.transform(input_features.reshape(1, -1))
+    predicted_price = model.predict(scaled_features)
+    return predicted_price[0][0]
+
+def decide_trade_action(predicted_price, predicted_price_lstm, current_price, ratio_threshold, accuracy_percentage):
+    avg_predicted_price = (predicted_price + predicted_price_lstm) / 2
+    price_ratio = avg_predicted_price / current_price
+    
+    if accuracy_percentage >= 90:
+        if price_ratio >= 1 + ratio_threshold:
+            return 'sell'
+        elif price_ratio <= 1 - ratio_threshold:
+            return 'buy'
+
+
+def calculate_ratio_threshold(df, window=30, multiplier=1.5):
+    
+    # Calculate the historical volatility
+    historical_volatility = df['Close'].pct_change().rolling(window=window).std()
+
+    # Calculate the mean of historical volatility
+    mean_volatility = historical_volatility.mean()
+
+    # Calculate the ratio_threshold based on the mean volatility
+    ratio_threshold = mean_volatility * multiplier
+
+    return ratio_threshold
+
+def signal_generator(open_price, close_price, previous_open, previous_close):
+    
+    if (open_price > close_price and 
+        previous_open < previous_close and 
+        close_price < previous_open and
+        open_price >= previous_close):
+        return 1
+    elif (open_price < close_price and 
+          previous_open > previous_close and 
+          close_price > previous_open and
+          open_price <= previous_close):
+        return 2
+    else:
+        return 0
+    pass
+
+def combine_predictions(predicted_price, predicted_price_lstm, alpha=0.5):
+    combined_predicted_price = alpha * predicted_price + (1 - alpha) * predicted_price_lstm
+    return combined_predicted_price
+
+def get_candles(symbol, start_date, end_date, interval):
+    data = yf.download(symbol, start=start_date, end=end_date, interval=interval)
+    return data
+
+symbol = symbol  # Replace with the symbol you want to fetch data for
+start_date = '2019-01-01'
+end_date = pd.Timestamp.today().strftime('%Y-%m-%d')
+interval = '1d'  # Use '15m' for 15-minute interval
+
+candles = get_candles(symbol, start_date, end_date, interval)
+
+for candle in candles.itertuples():
+    print("Open:", candle.Open)
+    print("High:", candle.High)
+    print("Low:", candle.Low)
+    print("Close:", candle.Close)
+    print("Volume:", candle.Volume)
+    print("Timestamp:", candle.Index)
+    print("-" * 30)
+
+# Read historical data from Yahoo Finance
+
+import yfinance as yf
+
+def get_live_stock_data(symbol, interval):
+    data = yf.download(symbol, interval=interval)
+    return data
+symbol = symbol  # Replace with the symbol you want to fetch data for
+interval = '1d'  # Use '15m' for 15-minute interval
+live_stock_data = get_live_stock_data(symbol, interval)
+
+# Create a DataFrame 'df' from the live stock data
+df = pd.DataFrame(live_stock_data)
+print(df)
+
+# Compute technical indicators
+df['SMA'] = ta.trend.SMAIndicator(df['Close'], window=14).sma_indicator()
+df['RSI'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
+df['MACD'] = ta.trend.MACD(df['Close']).macd()
+
+# Drop NaN values
+df.dropna(inplace=True)
+
+# Update X and y
+X = df[['High', 'Low', 'SMA', 'RSI', 'MACD']]
+y = df['Close']
+
+# Normalize the features
+scaler = MinMaxScaler(feature_range=(0, 2))
+X_scaled = scaler.fit_transform(X)
+
+# Define start and end points for training and testing
+train_start_date = '2018-01-01'  # Replace with  desired start date for training
+train_end_date = '2021-12-31'    # Replace with  desired end date for training
+test_start_date = '2022-01-01'   # Replace with  desired start date for testing
+test_end_date = '2023-08-18'     # Replace with  desired end date for testing
+
+# Filter data based on the defined date ranges
+train_data = df[(df.index >= train_start_date) & (df.index <= train_end_date)]
+test_data = df[(df.index >= test_start_date) & (df.index <= test_end_date)]
+
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2)
+
+results_df = pd.DataFrame(columns=['Timestamp', 'Action', 'Predicted_Price FNN', 'Predict_Price LSTM', 'RMSE', 'MAE'])
+
+# FNN Model
+model = Sequential()
+model.add(Dense(128, input_shape=(X_train.shape[1],), activation='relu'))
+model.add(Dropout(0.3))
+model.add(Dense(64, activation='relu'))
+model.add(Dropout(0.3))
+model.add(Dense(32, activation='relu'))
+model.add(Dropout(0.3))
+model.add(Dense(1, activation='linear'))
+
+model.compile(loss='mean_squared_error', optimizer='adam')
+
+model.fit(X_train, y_train, epochs=200, batch_size=64, validation_data=(X_test, y_test), verbose=1)
+
+#LSTM Model
+
+sequence_length = 50  # Number of historical data points to consider
+
+def prepare_lstm_data(df, sequence_length):
+    X_sequences = []  # List to store sequences
+    y_labels = []      # List to store labels
+    
+    for i in range(len(df) - sequence_length):
+        sequence = df.iloc[i:i + sequence_length]
+        X_sequences.append(sequence[['High', 'Low', 'SMA', 'RSI', 'MACD']].values)
+        y_labels.append(df.iloc[i + sequence_length]['Close'])
+    
+    return np.array(X_sequences), np.array(y_labels)
+
+X_lstm, y_lstm = prepare_lstm_data(df, sequence_length)
+X_train_lstm, X_test_lstm, y_train_lstm, y_test_lstm = train_test_split(X_lstm, y_lstm, test_size=0.2)
+
+# Compute technical indicators for LSTM input
+technical_indicators = ['SMA', 'RSI', 'MACD']
+
+input_features_for_lstm = []
+for i in range(len(df) - sequence_length):
+    sequence = df.iloc[i:i + sequence_length]
+    features = []
+    for indicator in technical_indicators:
+        indicator_values = sequence[indicator].tolist()
+        features.extend(indicator_values)
+    features.extend(sequence['High'].tolist())
+    features.extend(sequence['Low'].tolist())
+    input_features_for_lstm.append(features)
+
+input_features_array_lstm = np.array(input_features_for_lstm)
+num_sequences = len(input_features_for_lstm)
+num_features = len(technical_indicators) + 2
+input_features_array_lstm = input_features_array_lstm.reshape(num_sequences, sequence_length, num_features)
+
+# Hyperparameters for LSTM model
+lstm_units = 128
+dropout_rate = 0.3
+learning_rate = 0.05
+epochs = 200
+batch_size = 64
+
+# Model definition for LSTM
+lstm_model = Sequential()
+lstm_model.add(LSTM(lstm_units, input_shape=(sequence_length, num_features), return_sequences=True))
+lstm_model.add(Dropout(dropout_rate))
+lstm_model.add(LSTM(lstm_units))
+lstm_model.add(Dropout(dropout_rate))
+lstm_model.add(Dense(1, activation='linear'))
+
+optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=learning_rate)
+lstm_model.compile(loss='mean_squared_error', optimizer=optimizer)
+
+lstm_model.fit(X_train_lstm, y_train_lstm, epochs=epochs, batch_size=batch_size, validation_data=(X_test_lstm, y_test_lstm), verbose=1)
+
+# Fetch the latest values of technical indicators
+latest_close = df['Close'].iloc[-1]
+latest_sma = df['SMA'].iloc[-1]
+latest_rsi = df['RSI'].iloc[-1]
+latest_macd = df['MACD'].iloc[-1]
+latest_high = df['High'].iloc[-1]
+latest_low = df['Low'].iloc[-1]
+
+input_features_for_prediction = np.array([latest_high, latest_low, latest_sma, latest_rsi, latest_macd])
+
+# Reshape the input features to match the model's input shape (2D array)
+input_features_reshaped = input_features_for_prediction.reshape(1, -1)
+
+# Convert the input features to a NumPy array
+input_features_array = np.array(input_features_for_prediction)
+num_sequences = len(df) - sequence_length
+input_features_array_lstm = input_features_array_lstm.reshape(num_sequences, sequence_length, num_features)
+input_features_array_lstm = np.array(input_features_for_lstm)
+
+# Ensure you have enough data points for an LSTM sequence
+if len(input_features_array_lstm) >= sequence_length:
+    # Take the most recent data points equal to the sequence length
+    recent_data_for_lstm = input_features_array_lstm[-sequence_length:]
+
+    # Reshape the recent data to match the model's input shape
+    num_sequences_lstm = len(recent_data_for_lstm)
+    num_features_lstm = len(technical_indicators) + 2
+    recent_data_for_lstm_reshaped = recent_data_for_lstm.reshape(num_sequences_lstm, sequence_length, num_features_lstm)  
+else:
+    print("Not enough data points to create an LSTM sequence.")
+
+# Use model to make a price prediction
+predicted_price = make_price_prediction(model, input_features_reshaped)
+predicted_price_lstm = lstm_model.predict(recent_data_for_lstm_reshaped)[0][0]
+
+combined_predicted_price = combine_predictions(predicted_price, predicted_price_lstm, alpha=0.7)
+
+# Get the live current price of the stock 
+live_price_data = api.get_latest_trade(symbol)  # Replace  with  symbol of stock 
+current_price = live_price_data.price
+
+# Calculate the ratio_threshold value
+ratio_threshold = calculate_ratio_threshold(df, window=30, multiplier=1.5)
+
+# Calculate Mean Squared Error (MSE)
+squared_errors = (current_price - combined_predicted_price) ** 2
+mse = squared_errors.mean()
+
+# Calculate Root Mean Squared Error (RMSE)
+rmse = np.sqrt(mse)
+prediction_accuracy =  rmse
+
+# Calculate Mean Absolute Error (MAE)
+mae = np.abs(current_price - combined_predicted_price).mean()
+
+def calculate_accuracy_percentage(predicted_price, predicted_price_lstm, current_price):
+    combined_predicted_price = combine_predictions(predicted_price, predicted_price_lstm, alpha=0.7)
+    rmse_combined = np.sqrt(np.mean((current_price - combined_predicted_price) ** 2))
+    accuracy_percentage_combined = (1 - (rmse_combined / current_price)) * 100
+    return accuracy_percentage_combined
+accuracy_percentage = calculate_accuracy_percentage(predicted_price_lstm, predicted_price, current_price)
+
+# Use the calculated ratio_threshold value in the decide_trade_action function
+action = decide_trade_action(predicted_price, predicted_price_lstm, current_price, ratio_threshold, accuracy_percentage)
+
+print("Stock Data Analysis and Prediction")
+print("---------------------------------")
+print("Latest Stock Data :")
+print("Date:", current_date)
+print("Stock:", symbol)
+print("Current Price:", current_price)
+print("Ratio Threshold:", ratio_threshold)
+print("Accuracy Percentage:", accuracy_percentage, "%")
+
+results_df = pd.concat([results_df, pd.DataFrame({
+        'Timestamp': [candle.Index],
+        'Predicted_Price FNN': [predicted_price],
+        'Predict_Price LSTM' : [predicted_price_lstm],
+        'Action': [action],
+        'RMSE': [rmse],
+        'MAE': [mae]
+        })], ignore_index=True)
+print(results_df)
+
+clock = api.get_clock()
+if clock.is_open:
+    
+    if action == 'buy':
+        place_market_order(symbol, 5, 'buy')
+    elif action == 'sell':
+        place_market_order(symbol, 5, 'sell') 
+    else :
+        print ("_")    
+        
+else:
+    print("Market is closed.")
+    
